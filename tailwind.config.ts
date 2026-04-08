@@ -46,8 +46,8 @@ const config: Config = {
           sky:   "#7cc4ff",
           lilac: "#c8a8ff",
         },
-        gain: "#10b981",
-        loss: "#ef4444",
+        gain: "#0fab7a",   // slightly muted from #10b981
+        loss: "#e25555",   // slightly muted from #ef4444
         amber: "#f59e0b",
       },
       boxShadow: {

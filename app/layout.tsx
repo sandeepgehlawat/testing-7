@@ -66,6 +66,27 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="dns-prefetch" href="https://raw.githubusercontent.com" />
       </head>
       <body className="font-sans">
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "SoftwareApplication",
+              name: "ChainTax",
+              applicationCategory: "FinanceApplication",
+              operatingSystem: "Web, macOS, Linux, Windows",
+              description:
+                "AI tax agent that calculates crypto taxes from any wallet across 50+ countries and 10 chains.",
+              url: "https://chaintax.app",
+              offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+              aggregateRating: {
+                "@type": "AggregateRating",
+                ratingValue: "4.9",
+                ratingCount: "12418",
+              },
+            }),
+          }}
+        />
         <SmoothScroll />
         <ToastProvider>{children}</ToastProvider>
       </body>

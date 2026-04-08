@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowUpDown, ExternalLink, Search } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, ExternalLink, Search } from "lucide-react";
+import { explorerFor } from "@/lib/constants";
 import type { Tx, TxType } from "@/lib/tax";
 import { formatHeld } from "@/lib/tax";
 
@@ -24,7 +25,8 @@ type SortKey = "date" | "token" | "amount" | "costBasis" | "proceeds" | "gainLos
 export function TransactionTable({
   txs,
   country,
-}: { txs: Tx[]; country: string }) {
+  primaryChain = "Ethereum",
+}: { txs: Tx[]; country: string; primaryChain?: string }) {
   const [filter, setFilter] = useState<"All" | TxType>("All");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "date", dir: "desc" });
@@ -100,7 +102,8 @@ export function TransactionTable({
       </div>
 
       {/* Table */}
-      <div className="rounded-2xl border border-line overflow-hidden bg-white">
+      <div className="relative rounded-2xl border border-line overflow-hidden bg-white">
+        <div className="pointer-events-none absolute right-0 top-0 bottom-12 w-8 z-10 bg-gradient-to-l from-white to-transparent sm:hidden"/>
         <div className="overflow-x-auto" data-lenis-prevent>
           <table className="w-full text-[13px] tabular-nums">
             <thead className="bg-bg/60 border-b border-line">
@@ -137,7 +140,12 @@ export function TransactionTable({
                     <td className={`px-4 py-3 font-mono font-bold text-right ${
                       !t.isDisposal ? "text-sub" : isGain ? "text-gain" : "text-loss"
                     }`}>
-                      {t.isDisposal ? `${isGain ? "+" : "-"}$${Math.abs(pl).toFixed(2)}` : "—"}
+                      {t.isDisposal ? (
+                        <span className="inline-flex items-center justify-end gap-1">
+                          {isGain ? <ArrowUp size={11} strokeWidth={3}/> : <ArrowDown size={11} strokeWidth={3}/>}
+                          {`${isGain ? "+" : "-"}$${Math.abs(pl).toFixed(2)}`}
+                        </span>
+                      ) : "—"}
                     </td>
                     <td className="px-4 py-3">
                       <span className={taxFreeDE ? "text-gain font-semibold" : "text-sub"}>
@@ -151,7 +159,7 @@ export function TransactionTable({
                     </td>
                     <td className="px-4 py-3 text-right">
                       <a
-                        href={`https://www.oklink.com/xlayer/tx/${t.hash}`}
+                        href={`${explorerFor(primaryChain)}${t.hash}`}
                         target="_blank" rel="noopener noreferrer"
                         data-no-lenis
                         className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-sub hover:text-brand-700 hover:bg-brand-50 transition"

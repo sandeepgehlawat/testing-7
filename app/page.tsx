@@ -14,7 +14,7 @@ import {
 import {
   Calculator, Wallet, Globe2, Calendar, Zap, Sparkles, ArrowRight,
   TrendingUp, TrendingDown, Download, ShieldCheck, Bot, FileText, Network, Lock, Loader2,
-  Gauge, Coins, Receipt, ChevronRight, Github, Twitter,
+  Gauge, Coins, Receipt, ChevronRight, Github,
   Terminal, Copy, Check, Star, Menu, X, ClipboardPaste, StopCircle, Search, Info,
 } from "lucide-react";
 import { Select } from "@/components/Select";
@@ -50,17 +50,22 @@ export default function Home() {
   const [elapsed,setElapsed] = useState(0);
   const cancelRef = useRef(false);
 
-  // Restore once
+  // Restore once — defensively
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const s = JSON.parse(raw);
-      if (s.wallet)  setWallet(s.wallet);
-      if (s.country) setCountry(s.country);
-      if (s.year)    setYear(s.year);
-      if (Array.isArray(s.chains) && s.chains.length) setChains(s.chains);
-    } catch {}
+      if (s && typeof s === "object") {
+        if (typeof s.wallet === "string")  setWallet(s.wallet);
+        if (typeof s.country === "string") setCountry(s.country);
+        if (typeof s.year === "string")    setYear(s.year);
+        if (Array.isArray(s.chains) && s.chains.every((x:unknown)=>typeof x==="string") && s.chains.length) setChains(s.chains);
+      }
+    } catch {
+      // Corrupt blob — wipe
+      try { localStorage.removeItem(STORAGE_KEY); } catch {}
+    }
   }, []);
   // Persist
   useEffect(() => {
@@ -68,6 +73,13 @@ export default function Home() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ wallet, country, year, chains }));
     } catch {}
   }, [wallet, country, year, chains]);
+
+  // Lock body scroll when mobile menu open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    if (mobileNav) document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [mobileNav]);
   const [loading,setLoading] = useState(false);
   const [result,setResult] = useState<Result|null>(null);
   // progress state
@@ -81,6 +93,11 @@ export default function Home() {
   const [pkg,setPkg] = useState<Pkg>("npm");
   const [method,setMethod] = useState<CostBasisMethod>("FIFO");
   const [showTxs,setShowTxs] = useState(false);
+
+  // India is FIFO-only — keep method in sync
+  useEffect(() => {
+    if (country === "India" && method !== "FIFO") setMethod("FIFO");
+  }, [country, method]);
 
   // scroll progress bar (raw, no spring → no extra repaints)
   const { scrollYProgress: progress } = useScroll();
@@ -135,6 +152,8 @@ export default function Home() {
 
   const cancelScan = () => {
     cancelRef.current = true;
+    setLoading(false);
+    setPhase("idle");
     toast("Scan cancelled", "error");
   };
 
@@ -148,11 +167,17 @@ export default function Home() {
       (t.proceeds - t.costBasis).toFixed(2),
       String(t.heldDays), t.type, t.hash,
     ]);
-    const escape = (s: string) => /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    const escape = (s: string) => {
+      // Prevent CSV formula injection (Excel/Sheets exec '=', '+', '-', '@', tabs)
+      let v = s;
+      if (/^[=+\-@\t\r]/.test(v)) v = "'" + v;
+      return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    };
     const csv = [head, ...rows].map(r => r.map(escape).join(",")).join("\n");
     const code = (COUNTRIES.find(c => c.value === result.country)?.code ?? "xx").toUpperCase();
     const short = result.wallet.slice(2, 10).toLowerCase();
-    const filename = `xlayer-tax-${result.year}-${code}-0x${short}.csv`;
+    const chain = (chains[0] ?? "chain").toLowerCase().replace(/\s+/g, "");
+    const filename = `${chain}-tax-${result.year}-${code}-0x${short}.csv`;
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url  = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -169,7 +194,13 @@ export default function Home() {
   const onWalletChange = (v:string) => {
     setWallet(v);
     const guess = detectChain(v);
-    if (guess && !chains.includes(guess)) setChains(p=>[...p, guess]);
+    if (!guess) return;
+    // Replace any previously auto-detected family with the new one (don't accumulate stale ones)
+    const FAMILIES = new Set(["Ethereum","Bitcoin","Solana"]);
+    setChains(p => {
+      const stripped = p.filter(c => !FAMILIES.has(c));
+      return stripped.includes(guess) ? p : [...stripped, guess];
+    });
   };
 
   const sleep = (ms:number) => new Promise(r=>setTimeout(r,ms));
@@ -231,9 +262,12 @@ export default function Home() {
       const txList = generateSampleTxs(wallet, year);
       const totals = summarize(txList);
       setResult({ wallet, country, year, txs: txList, totals });
-      // India is FIFO-only
       if (country === "India") setMethod("FIFO");
       setShowTxs(true);
+      // Smooth-scroll the table into view on next paint
+      requestAnimationFrame(() => {
+        document.getElementById("results")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       setPhase("idle");
       const finalCount = generateSampleTxs(wallet, year).length;
       toast(`Done · ${finalCount} transactions in ${((performance.now()-t0)/1000).toFixed(1)}s`);
@@ -286,9 +320,9 @@ export default function Home() {
         </div>
         <nav className="hidden md:flex items-center gap-7 text-sm text-sub">
           <a href="#agent" className="hover:text-ink transition">Product</a>
-          <a href="#countries" className="hover:text-ink transition">Countries</a>
+          <a href="#how" className="hover:text-ink transition">How it works</a>
           <a href="#install" className="hover:text-ink transition">CLI</a>
-          <a href="#privacy" className="hover:text-ink transition">Security</a>
+          <a href="#faq" className="hover:text-ink transition">FAQ</a>
         </nav>
         <div className="flex items-center gap-2">
           <button
@@ -371,9 +405,9 @@ export default function Home() {
           </p>
 
           <div className="mt-8 flex flex-col xs:flex-row items-center justify-center gap-3">
-            <button className="btn-ghost !bg-ink !text-white !border-ink hover:!bg-brand-600 hover:!border-brand-600 hover:!text-white !h-12 !px-6 !text-[15px]">
+            <a href="#agent" className="btn-ghost !bg-ink !text-white !border-ink hover:!bg-brand-600 hover:!border-brand-600 hover:!text-white !h-12 !px-6 !text-[15px]">
               Start free <ArrowRight size={16}/>
-            </button>
+            </a>
             <button onClick={copyInstall} className="btn-ghost !h-12 !px-5 !text-[14px] font-mono">
               {copied ? <Check size={14} className="text-accent-mint"/> : <Terminal size={14}/>}
               {copied ? "copied!" : "$ npx chaintax-skill"}
@@ -444,13 +478,7 @@ export default function Home() {
               const showError = trimmed.length > 0 && !isValid;
               return (
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="label !mb-0">Wallet address</label>
-                    <button type="button" onClick={fillSample}
-                      className="text-[11px] font-semibold text-brand-700 hover:text-brand-800 inline-flex items-center gap-1">
-                      <Sparkles size={11}/> Try sample
-                    </button>
-                  </div>
+                  <label className="label">Wallet address</label>
                   <div className="field">
                     <Wallet size={16} className={`leading ${showError ? "!text-rose-500" : isValid ? "!text-accent-mint" : ""}`}/>
                     <input
@@ -640,8 +668,10 @@ export default function Home() {
                         type="button"
                         onClick={()=>{
                           setYear(y);
-                          setResult({...result, year:y});
-                          toast(`Year switched to ${y}`);
+                          // Regenerate the dataset deterministically for the new year
+                          const newTxs = generateSampleTxs(result.wallet, y);
+                          setResult({ ...result, year: y, txs: newTxs, totals: summarize(newTxs) });
+                          toast(`Switched to ${y}`);
                         }}
                         className={`px-1.5 h-5 rounded-full transition ${
                           sel ? "bg-brand-600 text-white" : "text-brand-700 hover:bg-brand-100"
@@ -733,7 +763,7 @@ export default function Home() {
 
                 {/* India TDS card */}
                 {isIndia && taxNow.tdsObligation && (
-                  <div className="rounded-2xl border-2 border-amber bg-amber/5 p-4">
+                  <div className="rounded-2xl border border-amber/60 bg-amber/5 p-4 ring-1 ring-amber/20">
                     <div className="text-[11px] uppercase tracking-wider font-bold text-amber">TDS Obligations</div>
                     <div className="mt-1 text-[13px] text-ink font-semibold">
                       {taxNow.tdsObligation.count} transactions over ₹50,000
@@ -759,20 +789,23 @@ export default function Home() {
                           type="button"
                           onClick={()=> !disabled && setMethod(m)}
                           disabled={disabled}
+                          aria-pressed={sel}
                           title={disabled ? "India requires FIFO." : `Estimated tax: ${fmt(t.tax)}`}
                           className={`relative rounded-xl border p-3 text-left transition ${
                             disabled ? "opacity-40 cursor-not-allowed bg-bg border-line" :
                             sel ? "border-brand-500 bg-brand-50/60 shadow-soft" : "border-line bg-white hover:border-brand-300"
                           }`}
                         >
-                          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-ink">
-                            <span className={`w-3 h-3 rounded-full border ${sel ? "bg-brand-600 border-brand-600 ring-4 ring-brand-100" : "border-line"}`}/>
-                            {m === "Avg" ? "Avg cost" : m}
+                          <div className="flex items-center justify-between gap-1.5 mb-2 min-h-[16px]">
+                            <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-ink">
+                              <span className={`w-3 h-3 rounded-full border ${sel ? "bg-brand-600 border-brand-600 ring-4 ring-brand-100" : "border-line"}`}/>
+                              {m === "Avg" ? "Avg cost" : m}
+                            </span>
                             {isLowest && (
-                              <span className="ml-auto inline-flex items-center gap-0.5 px-1 rounded text-[9px] bg-gain/15 text-gain font-bold">★ low</span>
+                              <span className="inline-flex items-center px-1.5 h-4 rounded text-[9px] bg-gain/15 text-gain font-bold">★ low</span>
                             )}
                           </div>
-                          <div className="mt-1.5 text-[15px] font-bold tracking-tight font-mono">{fmt(t.tax)}</div>
+                          <div className="text-[15px] font-bold tracking-tight font-mono">{fmt(t.tax)}</div>
                         </button>
                       );
                     })}
@@ -830,7 +863,7 @@ export default function Home() {
         {/* ── Transaction table (only after a result) ─────────── */}
         {result && showTxs && (
           <Reveal className="col-span-12">
-            <section className="bento">
+            <section id="results" className="scroll-mt-28 bento">
               <div className="flex items-center justify-between mb-5">
                 <div className="flex items-center gap-3">
                   <span className="ico"><Receipt size={16}/></span>
@@ -843,10 +876,53 @@ export default function Home() {
                   <Download size={14}/> Export CSV
                 </button>
               </div>
-              <TransactionTable txs={result.txs} country={result.country}/>
+              <TransactionTable txs={result.txs} country={result.country} primaryChain={chains[0]}/>
             </section>
           </Reveal>
         )}
+
+        {/* ── How it works (3 steps) ─────── */}
+        <Reveal className="col-span-12">
+          <section id="how" className="scroll-mt-28 bento">
+            <div className="flex items-center gap-3 mb-6">
+              <span className="ico"><Bot size={16}/></span>
+              <div>
+                <span className="eyebrow">How it works</span>
+                <h3 className="font-semibold text-[15px] mt-0.5">Three steps. Twelve seconds.</h3>
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-4">
+              {[
+                { n:"01", t:"Paste a wallet", d:"Any EVM, Bitcoin, or Solana address. We auto-detect the chain.", icon:<Wallet size={16}/> },
+                { n:"02", t:"Pick a country", d:"50+ jurisdictions with current tax rules baked in.", icon:<Globe2 size={16}/> },
+                { n:"03", t:"Get a filing-ready report", d:"Capital gains, income, TDS, exports — all in one click.", icon:<Receipt size={16}/> },
+              ].map((s)=>(
+                <div key={s.n} className="relative rounded-2xl border border-line bg-bg/50 p-5">
+                  <div className="absolute -top-3 left-5 px-2 py-0.5 rounded-full bg-ink text-white text-[10px] font-bold tracking-wider">
+                    STEP {s.n}
+                  </div>
+                  <span className="inline-grid place-items-center w-9 h-9 rounded-xl bg-white border border-line text-brand-600 mb-3">{s.icon}</span>
+                  <div className="font-semibold text-[15px]">{s.t}</div>
+                  <p className="text-sm text-sub mt-1.5 leading-relaxed">{s.d}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </Reveal>
+
+        {/* ── FAQ ────────────────────────── */}
+        <Reveal className="col-span-12">
+          <section id="faq" className="scroll-mt-28 bento">
+            <div className="flex items-center gap-3 mb-5">
+              <span className="ico !text-accent-rose"><Sparkles size={16}/></span>
+              <div>
+                <span className="eyebrow">Frequently asked</span>
+                <h3 className="font-semibold text-[15px] mt-0.5">Things people ask before signing up</h3>
+              </div>
+            </div>
+            <FAQ />
+          </section>
+        </Reveal>
 
         {/* ── Install (terminal) ───────── */}
         <Reveal className="col-span-12 lg:col-span-7">
@@ -1053,10 +1129,14 @@ export default function Home() {
       </main>
 
       {/* ============ FOOTER ============ */}
-      <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 mt-12 sm:mt-16 pb-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-sub">
+      <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 mt-12 sm:mt-16 pb-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-sub">
         <span>© 2026 ChainTax. Not legal advice.</span>
-        <div className="flex items-center gap-3">
-          <a href="https://x.com/chaintax" target="_blank" rel="noopener noreferrer" aria-label="ChainTax on X" className="hover:text-ink transition"><Twitter size={14}/></a>
+        <div className="flex items-center gap-5">
+          <a href="#privacy" className="hover:text-ink transition">Privacy</a>
+          <a href="#privacy" className="hover:text-ink transition">Terms</a>
+          <a href="#faq" className="hover:text-ink transition">FAQ</a>
+          <a href="#install" className="hover:text-ink transition">CLI</a>
+          <span className="w-px h-4 bg-line"/>
           <a href="https://github.com/chaintax" target="_blank" rel="noopener noreferrer" aria-label="ChainTax on GitHub" className="hover:text-ink transition"><Github size={14}/></a>
         </div>
       </footer>
@@ -1065,6 +1145,63 @@ export default function Home() {
 }
 
 /* ----- helpers ----- */
+
+function FAQ() {
+  const ITEMS = [
+    { q: "Is ChainTax really free?",
+      a: "The web app and CLI are free for individuals. We may add a paid tier for accountants, multi-wallet portfolios, and on-chain audit trails — early users get grandfathered." },
+    { q: "Do you ever see my private keys?",
+      a: "No. We only need a public address. Everything is read-only — we never sign, send, or store anything that touches your funds." },
+    { q: "Which countries do you support?",
+      a: "50+ jurisdictions with up-to-date rules, including the US, UK, Germany, India (with TDS), Canada, Australia, Singapore, UAE, Brazil, and more. We update tax rules every quarter." },
+    { q: "How does cost-basis selection work?",
+      a: "Pick FIFO, HIFO, or Average Cost — we recompute the tax estimate live so you can pick the legal method that minimizes what you owe. India is FIFO-only by law." },
+    { q: "Can I export to TurboTax / Form 8949?",
+      a: "Yes. Click Export CSV from the summary card. We're rolling out TurboTax, Koinly, and IRS Form 8949 native exports next." },
+    { q: "What if my wallet has thousands of transactions?",
+      a: "The agent streams transactions and prices in parallel. Most 5,000-tx wallets finish in under 30 seconds." },
+    { q: "Is this legal advice?",
+      a: "No. ChainTax produces estimates and filing-ready breakdowns, but the final return is yours to file. Always verify with a licensed accountant." },
+  ];
+  const [open, setOpen] = useState<number | null>(0);
+  return (
+    <div className="divide-y divide-line border-y border-line">
+      {ITEMS.map((it, i) => {
+        const isOpen = open === i;
+        return (
+          <div key={it.q}>
+            <button
+              type="button"
+              onClick={()=>setOpen(isOpen ? null : i)}
+              aria-expanded={isOpen}
+              className="w-full flex items-center justify-between gap-4 py-4 text-left group"
+            >
+              <span className={`text-[15px] font-semibold transition ${isOpen ? "text-brand-700" : "text-ink group-hover:text-brand-700"}`}>
+                {it.q}
+              </span>
+              <span className={`shrink-0 w-7 h-7 rounded-full border border-line grid place-items-center transition ${isOpen ? "bg-brand-600 border-brand-600 text-white rotate-45" : "text-sub group-hover:border-brand-300"}`}>
+                +
+              </span>
+            </button>
+            <AnimatePresence initial={false}>
+              {isOpen && (
+                <motion.div
+                  initial={{ height:0, opacity:0 }}
+                  animate={{ height:"auto", opacity:1 }}
+                  exit={{ height:0, opacity:0 }}
+                  transition={{ duration:.22, ease:"easeOut" }}
+                  className="overflow-hidden"
+                >
+                  <p className="text-sm text-sub leading-relaxed pb-5 pr-10">{it.a}</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function Mini({label,value,icon,tint,tip,valueClass,note}:{label:string;value:string;icon:React.ReactNode;tint?:string;tip?:string;valueClass?:string;note?:string}) {
   return (

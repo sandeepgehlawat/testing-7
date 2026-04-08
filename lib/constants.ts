@@ -79,7 +79,8 @@ export const COUNTRIES: Country[] = [
   { value: "Peru",           label: "Peru",                   code: "pe" },
 ];
 
-export const YEARS = ["2026","2025","2024","2023"].map(y=>({value:y,label:y}));
+export const YEARS = ["2026","2025","2024","2023","2022","2021","2020","2019","2018"]
+  .map(y=>({value:y,label:y}));
 
 export const STEPS = [
   "Connect to network",
@@ -90,14 +91,43 @@ export const STEPS = [
   "Generating report",
 ];
 
-// Detect chain family from a wallet address prefix
+// Stricter chain detection — checked in priority order
 export function detectChain(addr: string): string | null {
   const a = addr.trim();
+  if (!a) return null;
+  // EVM: exactly 0x + 40 hex
   if (/^0x[0-9a-fA-F]{40}$/.test(a)) return "Ethereum";
-  if (/^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,}$/.test(a)) return "Bitcoin";
-  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a) && !a.startsWith("0x")) return "Solana";
+  // BTC bech32 / legacy
+  if (/^bc1[a-z0-9]{25,87}$/.test(a)) return "Bitcoin";
+  if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(a)) return "Bitcoin";
+  // Solana base58 — strict 32–44 alnum without 0OIl
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return "Solana";
   return null;
 }
 
 export const fmt = (n: number) =>
   "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+
+// Country tax-rate config — single source of truth for the engine
+export const TAX_RATES = {
+  India:           { flat: 0.30, allowsOffset: false, longTermFree: false },
+  Germany:         { shortTerm: 0.25, longTermFree: true,  income: 0.25, allowsOffset: true },
+  "United States": { longTerm: 0.15, shortTerm: 0.22, income: 0.22, allowsOffset: true },
+  default:         { rate: 0.20, income: 0.20, allowsOffset: true },
+} as const;
+
+// Per-chain explorer base URL for tx links
+export const CHAIN_EXPLORERS: Record<string, string> = {
+  Ethereum:  "https://etherscan.io/tx/",
+  Bitcoin:   "https://blockstream.info/tx/",
+  Solana:    "https://solscan.io/tx/",
+  Polygon:   "https://polygonscan.com/tx/",
+  Arbitrum:  "https://arbiscan.io/tx/",
+  Base:      "https://basescan.org/tx/",
+  "X Layer": "https://www.oklink.com/xlayer/tx/",
+  Monad:     "https://monadscan.com/tx/",
+  Optimism:  "https://optimistic.etherscan.io/tx/",
+  Avalanche: "https://snowtrace.io/tx/",
+};
+export const explorerFor = (chain: string) =>
+  CHAIN_EXPLORERS[chain] ?? CHAIN_EXPLORERS["Ethereum"];
