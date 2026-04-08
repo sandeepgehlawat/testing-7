@@ -1,0 +1,136 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 96px;
+  }
+  html, body { @apply h-full; }
+  body {
+    @apply font-sans text-ink antialiased bg-bg;
+    background-image:
+      radial-gradient(900px 600px at 85% -10%, #f3f2ff 0%, transparent 55%),
+      radial-gradient(800px 600px at -10% 110%, #ffeef4 0%, transparent 55%);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: #d4d0ff; color: #2a1f72; }
+}
+
+@layer components {
+  /* ---------- Bento card base ---------- */
+  .bento {
+    @apply relative bg-card rounded-bento border border-line shadow-card
+           p-5 sm:p-6 transition-all duration-300;
+  }
+  .bento-clip { @apply overflow-hidden; }
+  .bento:hover { @apply shadow-cardHover -translate-y-[1px]; }
+  .bento-dark {
+    @apply relative rounded-bento border border-white/10 shadow-card
+           p-5 sm:p-6 overflow-hidden text-white;
+    background:
+      radial-gradient(120% 100% at 0% 0%, #1f1745 0%, transparent 60%),
+      radial-gradient(120% 100% at 100% 100%, #3b2aa0 0%, transparent 60%),
+      #0a0a1a;
+  }
+
+  /* card icon chip — unified across all cards */
+  .ico {
+    @apply w-9 h-9 rounded-xl bg-white border border-line grid place-items-center
+           shadow-soft text-brand-600;
+  }
+  .ico-dark {
+    @apply w-9 h-9 rounded-xl bg-white/10 border border-white/15 grid place-items-center
+           text-white;
+  }
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em] text-sub;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full
+           bg-brand-50 text-brand-700 text-[11px] font-semibold;
+  }
+
+  /* ---------- Form ---------- */
+  .field { @apply relative; }
+  .input {
+    @apply w-full h-12 bg-white border border-line rounded-xl
+           pl-11 pr-4 text-[15px] text-ink placeholder-sub/60
+           outline-none transition-all
+           hover:border-brand-200
+           focus:border-brand-500 focus:shadow-ringBrand;
+  }
+  select.input {
+    @apply pr-10 appearance-none bg-no-repeat cursor-pointer;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b6b85' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-position: right 14px center;
+  }
+  .leading {
+    @apply absolute left-4 top-1/2 -translate-y-1/2 text-sub pointer-events-none;
+  }
+  .label {
+    @apply block text-[12px] font-semibold text-ink mb-2;
+  }
+
+  /* ---------- Chips ---------- */
+  .chip {
+    @apply inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full
+           border border-line bg-white text-[13px] font-medium text-ink
+           cursor-pointer transition select-none
+           hover:border-brand-300 hover:text-brand-700 hover:bg-brand-50/40;
+  }
+  .chip-on {
+    @apply bg-brand-600 text-white border-brand-600 shadow-soft
+           hover:bg-brand-600 hover:text-white hover:border-brand-600;
+  }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    @apply w-full inline-flex items-center justify-center gap-2 h-12 rounded-xl
+           text-[15px] font-semibold px-4 transition-all
+           bg-ink text-white hover:bg-brand-600
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply bg-gradient-to-b from-brand-500 to-brand-700 text-white
+           shadow-[0_8px_20px_-8px_rgba(91,70,232,.6),inset_0_1px_0_rgba(255,255,255,.25)]
+           hover:from-brand-600 hover:to-brand-800;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl
+           bg-white text-ink text-[14px] font-medium px-4 h-10 border border-line
+           transition hover:border-brand-300 hover:text-brand-700;
+  }
+  .btn-light-on-dark {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl
+           bg-white text-ink text-[14px] font-semibold px-4 h-10
+           transition hover:bg-bg shadow-soft;
+  }
+
+  /* divider */
+  .divider { @apply h-px w-full bg-line; }
+}
+
+/* nicer native scrollbar */
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #d4d0ff;
+  border: 3px solid #fafafc;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: #b3acff; }
+
+/* utility helpers */
+.dots {
+  background-image: radial-gradient(circle, rgba(108,92,245,.10) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+.shimmer-text {
+  background: linear-gradient(90deg,#5b46e8 0%,#ff6b9d 50%,#ffb088 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
