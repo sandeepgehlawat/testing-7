@@ -11,6 +11,7 @@ import {
   generateSampleTxs, summarize, estimateTax,
   type Tx, type Totals, type CostBasisMethod,
 } from "@/lib/tax";
+import { generateTaxReport } from "@/lib/pdf";
 import {
   Calculator, Wallet, Globe2, Calendar, Zap, Sparkles, ArrowRight,
   TrendingUp, TrendingDown, Download, ShieldCheck, Bot, FileText, Network, Lock, Loader2,
@@ -44,7 +45,7 @@ export default function Home() {
   // Hydrate from localStorage on mount
   const [wallet,setWallet] = useState("");
   const [country,setCountry] = useState("");
-  const [year,setYear] = useState("2025");
+  const [year,setYear] = useState("2026");
   const [chains,setChains] = useState<string[]>(["Ethereum","Base"]);
   const [mobileNav,setMobileNav] = useState(false);
   const [elapsed,setElapsed] = useState(0);
@@ -93,6 +94,7 @@ export default function Home() {
   const [pkg,setPkg] = useState<Pkg>("npm");
   const [method,setMethod] = useState<CostBasisMethod>("FIFO");
   const [showTxs,setShowTxs] = useState(false);
+  // Demo mode only - real tax calculation is handled by the chaintax-skill CLI
 
   // India is FIFO-only — keep method in sync
   useEffect(() => {
@@ -205,6 +207,37 @@ export default function Home() {
 
   const sleep = (ms:number) => new Promise(r=>setTimeout(r,ms));
 
+  // PDF export function
+  const exportPDF = async () => {
+    if (!result) return;
+    const taxInfo = estimateTax(result.totals, result.country, method);
+    try {
+      const blob = await generateTaxReport({
+        wallet: result.wallet,
+        country: result.country,
+        year: result.year,
+        method,
+        txs: result.txs,
+        totals: result.totals,
+        estimatedTax: taxInfo.tax,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const code = (COUNTRIES.find(c => c.value === result.country)?.code ?? "xx").toUpperCase();
+      const short = result.wallet.slice(2, 10).toLowerCase();
+      a.href = url;
+      a.download = `chaintax-${result.year}-${code}-0x${short}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast("PDF report downloaded");
+    } catch (err) {
+      toast("Failed to generate PDF", "error");
+      console.error(err);
+    }
+  };
+
   const onSubmit = async (e:React.FormEvent) => {
     e.preventDefault();
     setResult(null);
@@ -222,55 +255,55 @@ export default function Home() {
     const checkCancel = () => { if (cancelRef.current) throw new Error("__cancelled__"); };
 
     try {
-      // Step 0 — Connect
-      setStepIdx(0); setProgress01(0.05);
-      await sleep(500);
+        // ============ DEMO MODE: Sample data ============
+        // For real tax calculation, use: npx chaintax-skill calculate
+        // Step 0 — Connect
+        setStepIdx(0); setProgress01(0.05);
+        await sleep(500);
 
-      // Step 1 — Find transactions
-      setStepIdx(1); setProgress01(0.18);
-      const totalTxs = Math.floor(Math.random()*180+60);
-      for (let i=0;i<=totalTxs;i+=Math.max(1,Math.floor(totalTxs/12))){
-        setCounter(c=>({...c,txs:Math.min(i,totalTxs),total:totalTxs}));
-        await sleep(35); checkCancel();
-      }
-      setCounter(c=>({...c,txs:totalTxs,total:totalTxs,tokens:Math.floor(Math.random()*8+5)}));
+        // Step 1 — Find transactions
+        setStepIdx(1); setProgress01(0.18);
+        const totalTxs = Math.floor(Math.random()*180+60);
+        for (let i=0;i<=totalTxs;i+=Math.max(1,Math.floor(totalTxs/12))){
+          setCounter(c=>({...c,txs:Math.min(i,totalTxs),total:totalTxs}));
+          await sleep(35); checkCancel();
+        }
+        setCounter(c=>({...c,txs:totalTxs,total:totalTxs,tokens:Math.floor(Math.random()*8+5)}));
 
-      // Step 2 — Fetch historical prices
-      setStepIdx(2); setProgress01(0.34);
-      for (let i=0;i<=totalTxs;i+=Math.max(1,Math.floor(totalTxs/16))){
-        setCounter(c=>({...c,prices:Math.min(i,totalTxs)}));
-        setProgress01(0.34 + (i/totalTxs)*0.28);
-        await sleep(28); checkCancel();
-      }
-      setCounter(c=>({...c,prices:totalTxs}));
+        // Step 2 — Fetch historical prices
+        setStepIdx(2); setProgress01(0.34);
+        for (let i=0;i<=totalTxs;i+=Math.max(1,Math.floor(totalTxs/16))){
+          setCounter(c=>({...c,prices:Math.min(i,totalTxs)}));
+          setProgress01(0.34 + (i/totalTxs)*0.28);
+          await sleep(28); checkCancel();
+        }
+        setCounter(c=>({...c,prices:totalTxs}));
 
-      // Step 3 — Classify
-      setStepIdx(3); setProgress01(0.7);
-      await sleep(550);
+        // Step 3 — Classify
+        setStepIdx(3); setProgress01(0.7);
+        await sleep(550);
 
-      // Step 4 — Calculate gains
-      setStepIdx(4); setProgress01(0.86);
-      await sleep(450);
+        // Step 4 — Calculate gains
+        setStepIdx(4); setProgress01(0.86);
+        await sleep(450);
 
-      // Step 5 — Generate report
-      setStepIdx(5); setProgress01(0.96);
-      await sleep(400);
+        // Step 5 — Generate report
+        setStepIdx(5); setProgress01(0.96);
+        await sleep(400);
 
-      setProgress01(1);
-      await sleep(180);
+        setProgress01(1);
+        await sleep(180);
 
-      const txList = generateSampleTxs(wallet, year);
-      const totals = summarize(txList);
-      setResult({ wallet, country, year, txs: txList, totals });
-      if (country === "India") setMethod("FIFO");
-      setShowTxs(true);
-      // Smooth-scroll the table into view on next paint
-      requestAnimationFrame(() => {
-        document.getElementById("results")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-      setPhase("idle");
-      const finalCount = generateSampleTxs(wallet, year).length;
-      toast(`Done · ${finalCount} transactions in ${((performance.now()-t0)/1000).toFixed(1)}s`);
+        const txList = generateSampleTxs(wallet, year);
+        const totals = summarize(txList);
+        setResult({ wallet, country, year, txs: txList, totals });
+        if (country === "India") setMethod("FIFO");
+        setShowTxs(true);
+        requestAnimationFrame(() => {
+          document.getElementById("results")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        setPhase("idle");
+        toast(`Done · ${txList.length} transactions in ${((performance.now()-t0)/1000).toFixed(1)}s`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Something went wrong.";
       if (msg === "__cancelled__") {
@@ -333,8 +366,12 @@ export default function Home() {
             <Search size={13}/>
             <kbd className="font-mono text-[10px] bg-bg border border-line rounded px-1">⌘K</kbd>
           </button>
-          <button className="btn-ghost hidden md:inline-flex">Sign in</button>
-          <button className="btn-ghost !bg-ink !text-white !border-ink hover:!bg-brand-600 hover:!border-brand-600 hover:!text-white !px-3 sm:!px-4 hidden xs:inline-flex">
+          {/* Auth disabled - uncomment if OAuth configured */}
+          {/* <AuthButton /> */}
+          <button
+            onClick={() => document.getElementById("agent")?.scrollIntoView({ behavior: "smooth" })}
+            className="btn-ghost !bg-ink !text-white !border-ink hover:!bg-brand-600 hover:!border-brand-600 hover:!text-white !px-3 sm:!px-4 hidden xs:inline-flex"
+          >
             <span className="hidden sm:inline">Get started</span>
             <span className="sm:hidden">Start</span>
             <ArrowRight size={14}/>
@@ -368,7 +405,10 @@ export default function Home() {
                     {label}
                   </a>
                 ))}
-                <button className="mt-2 btn-ghost !bg-ink !text-white !border-ink !justify-center">
+                <button
+                  onClick={() => { setMobileNav(false); document.getElementById("agent")?.scrollIntoView({ behavior: "smooth" }); }}
+                  className="mt-2 btn-ghost !bg-ink !text-white !border-ink !justify-center"
+                >
                   Get started <ArrowRight size={14}/>
                 </button>
               </div>
@@ -461,7 +501,7 @@ export default function Home() {
               >
                 <Sparkles size={11}/> Run demo
               </button>
-              <span className="live hidden sm:inline-flex">live</span>
+              <span className="live hidden sm:inline-flex">demo</span>
             </div>
           </div>
 
@@ -716,6 +756,7 @@ export default function Home() {
             )}
 
             {!loading && result && (() => {
+              try {
               const isIndia = result.country === "India";
               const taxFIFO = estimateTax(result.totals, result.country, "FIFO");
               const taxHIFO = estimateTax(result.totals, result.country, "HIFO");
@@ -849,6 +890,9 @@ export default function Home() {
                       className="text-brand-700 font-semibold flex items-center gap-1 hover:underline">
                       {showTxs ? "Hide" : "View"} transactions <ChevronRight size={14}/>
                     </button>
+                    <button onClick={exportPDF} className="text-brand-700 font-semibold flex items-center gap-1 hover:underline">
+                      Export PDF
+                    </button>
                     <button onClick={()=>exportCSV()} className="text-brand-700 font-semibold flex items-center gap-1 hover:underline">
                       Export CSV
                     </button>
@@ -856,6 +900,14 @@ export default function Home() {
                 </div>
               </motion.div>
               );
+              } catch (err) {
+                console.error("Summary render error:", err);
+                return (
+                  <motion.div key="r-err" initial={{opacity:0}} animate={{opacity:1}} className="p-4 bg-rose-50 rounded-xl text-rose-700 text-sm">
+                    Error rendering summary. Check console for details.
+                  </motion.div>
+                );
+              }
             })()}
           </AnimatePresence>
         </motion.section>
@@ -872,9 +924,14 @@ export default function Home() {
                     <p className="eyebrow mt-0.5">{result.txs.length} disposals · {result.country} · {result.year}</p>
                   </div>
                 </div>
-                <button onClick={exportCSV} className="btn-ghost !h-9 !text-[12px]">
-                  <Download size={14}/> Export CSV
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={exportPDF} className="btn-ghost !h-9 !text-[12px]">
+                    <FileText size={14}/> PDF
+                  </button>
+                  <button onClick={exportCSV} className="btn-ghost !h-9 !text-[12px]">
+                    <Download size={14}/> CSV
+                  </button>
+                </div>
               </div>
               <TransactionTable txs={result.txs} country={result.country} primaryChain={chains[0]}/>
             </section>
@@ -991,10 +1048,13 @@ export default function Home() {
             Let the agent do the boring math. You sign the return.
           </p>
           <div className="flex flex-wrap gap-2">
-            <button className="btn-ghost !bg-ink !text-white !border-ink hover:!bg-brand-600 hover:!border-brand-600 hover:!text-white">
+            <button
+              onClick={() => document.getElementById("agent")?.scrollIntoView({ behavior: "smooth" })}
+              className="btn-ghost !bg-ink !text-white !border-ink hover:!bg-brand-600 hover:!border-brand-600 hover:!text-white"
+            >
               Start free <ArrowRight size={14}/>
             </button>
-            <button className="btn-ghost">View demo</button>
+            <button onClick={runSampleDemo} className="btn-ghost">View demo</button>
           </div>
         </section>
         </Reveal>

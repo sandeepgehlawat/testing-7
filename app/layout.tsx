@@ -3,6 +3,7 @@ import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { SmoothScroll } from "@/components/SmoothScroll";
 import { ToastProvider } from "@/components/Toast";
+import { SessionProvider } from "@/components/SessionProvider";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -88,7 +89,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }}
         />
         <SmoothScroll />
-        <ToastProvider>{children}</ToastProvider>
+        <SessionProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </SessionProvider>
       </body>
     </html>
   );
