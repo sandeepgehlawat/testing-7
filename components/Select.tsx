@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Search } from "lucide-react";
 
 type Option = { value: string; label: string; hint?: string; leading?: React.ReactNode };
 
@@ -13,6 +13,7 @@ export function Select({
   placeholder = "Select…",
   icon,
   ariaLabel,
+  searchable = false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -20,12 +21,21 @@ export function Select({
   placeholder?: string;
   icon?: React.ReactNode;
   ariaLabel?: string;
+  searchable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const selected = options.find((o) => o.value === value);
+
+  const filtered = useMemo(() => {
+    if (!searchable || !query.trim()) return options;
+    const q = query.trim().toLowerCase();
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, query, searchable]);
 
   // Close on outside click
   useEffect(() => {
@@ -39,24 +49,30 @@ export function Select({
   // Sync active index when opening
   useEffect(() => {
     if (open) {
-      const i = options.findIndex((o) => o.value === value);
+      const i = filtered.findIndex((o) => o.value === value);
       setActive(i >= 0 ? i : 0);
+      if (searchable) setTimeout(() => inputRef.current?.focus(), 30);
+    } else {
+      setQuery("");
     }
-  }, [open, value, options]);
+  }, [open, value, filtered, searchable]);
 
   const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
+    if (e.key === "Enter") {
       e.preventDefault();
       if (!open) return setOpen(true);
-      const opt = options[active];
+      const opt = filtered[active];
       if (opt) {
         onChange(opt.value);
         setOpen(false);
       }
+    } else if (e.key === " " && !searchable) {
+      e.preventDefault();
+      setOpen((o) => !o);
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       if (!open) setOpen(true);
-      else setActive((i) => Math.min(i + 1, options.length - 1));
+      else setActive((i) => Math.min(i + 1, filtered.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((i) => Math.max(i - 1, 0));
@@ -69,9 +85,11 @@ export function Select({
     <div className="relative" ref={ref}>
       <button
         type="button"
+        role="combobox"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls="select-listbox"
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onKey}
         className={`group w-full h-12 bg-white border rounded-xl
@@ -105,13 +123,32 @@ export function Select({
             exit={{ opacity: 0, y: -6, scale: 0.98 }}
             transition={{ duration: 0.14, ease: "easeOut" }}
             className="absolute z-50 mt-2 w-full rounded-2xl bg-white border border-line shadow-cardHover overflow-hidden"
+            role="listbox"
+            aria-label={ariaLabel}
           >
+            {searchable && (
+              <div className="relative border-b border-line">
+                <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sub pointer-events-none" />
+                <input
+                  ref={inputRef}
+                  value={query}
+                  onChange={(e) => { setQuery(e.target.value); setActive(0); }}
+                  onKeyDown={onKey}
+                  placeholder="Search…"
+                  className="w-full h-11 pl-10 pr-3 text-sm bg-transparent outline-none placeholder-sub/60"
+                  aria-label="Search options"
+                />
+              </div>
+            )}
             <ul
               ref={listRef}
-              role="listbox"
-              className="max-h-64 overflow-y-auto p-1.5 scroll-smooth"
+              data-lenis-prevent
+              className="max-h-64 overflow-y-auto overscroll-contain p-1.5"
             >
-              {options.map((o, i) => {
+              {filtered.length === 0 && (
+                <li className="px-3 py-3 text-sm text-sub text-center">No matches</li>
+              )}
+              {filtered.map((o, i) => {
                 const isSel = o.value === value;
                 const isAct = i === active;
                 return (

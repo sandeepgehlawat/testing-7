@@ -1,97 +1,273 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { motion, AnimatePresence, useScroll, useSpring } from "framer-motion";
+import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence, useScroll } from "framer-motion";
 import { Reveal } from "@/components/Reveal";
+import { CommandPalette } from "@/components/CommandPalette";
+import { CountUp } from "@/components/CountUp";
+import { useToast } from "@/components/Toast";
+import { TransactionTable } from "@/components/TransactionTable";
+import {
+  generateSampleTxs, summarize, estimateTax,
+  type Tx, type Totals, type CostBasisMethod,
+} from "@/lib/tax";
 import {
   Calculator, Wallet, Globe2, Calendar, Zap, Sparkles, ArrowRight,
-  TrendingUp, ShieldCheck, Bot, FileText, Network, Lock, Loader2,
+  TrendingUp, TrendingDown, Download, ShieldCheck, Bot, FileText, Network, Lock, Loader2,
   Gauge, Coins, Receipt, ChevronRight, Github, Twitter,
-  Terminal, Copy, Check, Star,
+  Terminal, Copy, Check, Star, Menu, X, ClipboardPaste, StopCircle, Search, Info,
 } from "lucide-react";
 import { Select } from "@/components/Select";
+import { CHAINS, COUNTRIES, YEARS, flag, fmt, detectChain } from "@/lib/constants";
 
-const INSTALL_CMD = "npx chaintax-skill install";
-
-const CHAINS = [
-  { name: "Ethereum", color: "#627eea" },
-  { name: "Bitcoin",  color: "#f7931a" },
-  { name: "Solana",   color: "#14f195" },
-  { name: "Polygon",  color: "#8247e5" },
-  { name: "Arbitrum", color: "#28a0f0" },
-  { name: "Base",     color: "#0052ff" },
-];
-const flag = (code: string) =>
-  `https://hatscripts.github.io/circle-flags/flags/${code}.svg`;
-
-const COUNTRIES = [
-  { value: "United States",  label: "United States",  code: "us" },
-  { value: "United Kingdom", label: "United Kingdom", code: "gb" },
-  { value: "Germany",        label: "Germany",        code: "de" },
-  { value: "France",         label: "France",         code: "fr" },
-  { value: "Canada",         label: "Canada",         code: "ca" },
-  { value: "Australia",      label: "Australia",      code: "au" },
-  { value: "India",          label: "India",          code: "in" },
-  { value: "Japan",          label: "Japan",          code: "jp" },
-  { value: "Singapore",      label: "Singapore",      code: "sg" },
-  { value: "Nigeria",        label: "Nigeria",        code: "ng" },
-];
-const YEARS = ["2026","2025","2024","2023"].map(y=>({value:y,label:y}));
-
-const fmt = (n:number) => "$" + n.toLocaleString("en-US",{maximumFractionDigits:0});
+const INSTALL_CMDS = {
+  npm:  "npx chaintax-skill install",
+  pnpm: "pnpm dlx chaintax-skill install",
+  yarn: "yarn dlx chaintax-skill install",
+  bun:  "bunx chaintax-skill install",
+} as const;
+type Pkg = keyof typeof INSTALL_CMDS;
+const INSTALL_CMD = INSTALL_CMDS.npm;
 
 type Result = {
-  wallet:string; country:string; year:string; txs:number;
-  proceeds:number; cost:number; gains:number; income:number; tax:number;
+  wallet:string; country:string; year:string;
+  txs: Tx[];
+  totals: Totals;
 };
 
+const SAMPLE_WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"; // vitalik.eth
+const STORAGE_KEY = "chaintax:v1";
+
 export default function Home() {
+  const { toast } = useToast();
+
+  // Hydrate from localStorage on mount
   const [wallet,setWallet] = useState("");
   const [country,setCountry] = useState("");
   const [year,setYear] = useState("2025");
   const [chains,setChains] = useState<string[]>(["Ethereum","Base"]);
+  const [mobileNav,setMobileNav] = useState(false);
+  const [elapsed,setElapsed] = useState(0);
+  const cancelRef = useRef(false);
+
+  // Restore once
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (s.wallet)  setWallet(s.wallet);
+      if (s.country) setCountry(s.country);
+      if (s.year)    setYear(s.year);
+      if (Array.isArray(s.chains) && s.chains.length) setChains(s.chains);
+    } catch {}
+  }, []);
+  // Persist
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ wallet, country, year, chains }));
+    } catch {}
+  }, [wallet, country, year, chains]);
   const [loading,setLoading] = useState(false);
   const [result,setResult] = useState<Result|null>(null);
+  // progress state
+  type Phase = "idle" | "processing" | "error";
+  const [phase,setPhase] = useState<Phase>("idle");
+  const [progress01,setProgress01] = useState(0);
+  const [stepIdx,setStepIdx] = useState(0);
+  const [counter,setCounter] = useState({txs:0,tokens:0,prices:0,total:0});
+  const [errMsg,setErrMsg] = useState("");
   const [copied,setCopied] = useState(false);
-  const [scrolled,setScrolled] = useState(false);
+  const [pkg,setPkg] = useState<Pkg>("npm");
+  const [method,setMethod] = useState<CostBasisMethod>("FIFO");
+  const [showTxs,setShowTxs] = useState(false);
 
-  // scroll progress bar
-  const { scrollYProgress } = useScroll();
-  const progress = useSpring(scrollYProgress, { stiffness: 120, damping: 25, mass: 0.3 });
+  // scroll progress bar (raw, no spring → no extra repaints)
+  const { scrollYProgress: progress } = useScroll();
 
-  // shrink/blur nav after scroll
+  // shrink nav after scroll — pure CSS data-attr toggle (no React re-renders)
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 16);
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    const sentinel = document.createElement("div");
+    sentinel.style.cssText = "position:absolute;top:0;left:0;width:1px;height:1px;pointer-events:none;";
+    document.body.prepend(sentinel);
+    const io = new IntersectionObserver(
+      ([entry]) => document.documentElement.dataset.scrolled = entry.isIntersecting ? "false" : "true",
+      { rootMargin: "0px" }
+    );
+    io.observe(sentinel);
+    return () => { io.disconnect(); sentinel.remove(); };
   }, []);
 
   const copyInstall = async () => {
-    try { await navigator.clipboard.writeText(INSTALL_CMD); } catch {}
+    try { await navigator.clipboard.writeText(INSTALL_CMDS[pkg]); } catch {}
     setCopied(true);
+    toast("Install command copied");
     setTimeout(()=>setCopied(false),1800);
+  };
+
+  const fillSample = () => {
+    setWallet(SAMPLE_WALLET);
+    if (!country) setCountry("United States");
+    setChains((prev)=> prev.includes("Ethereum") ? prev : [...prev, "Ethereum"]);
+    toast("Sample wallet loaded · vitalik.eth");
+  };
+
+  const runSampleDemo = async () => {
+    setWallet(SAMPLE_WALLET);
+    setCountry("India");        // demo India to show TDS card + FIFO lock
+    setYear("2024");
+    setChains(["Ethereum","X Layer"]);
+    toast("Running sample · India 2024");
+    // Submit on next tick after state has propagated
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const fakeEvt = { preventDefault: () => {} } as React.FormEvent;
+    await onSubmit(fakeEvt);
+  };
+
+  const pasteFromClipboard = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) onWalletChange(t);
+    } catch {
+      toast("Clipboard unavailable", "error");
+    }
+  };
+
+  const cancelScan = () => {
+    cancelRef.current = true;
+    toast("Scan cancelled", "error");
+  };
+
+  // CSV export — proper filename + immediate download + toast
+  const exportCSV = () => {
+    if (!result) return;
+    const head = ["date","token","amount","cost_basis_usd","proceeds_usd","gain_loss_usd","held_days","type","tx_hash"];
+    const rows = result.txs.map((t) => [
+      t.date, t.token, t.amount.toFixed(4),
+      t.costBasis.toFixed(2), t.proceeds.toFixed(2),
+      (t.proceeds - t.costBasis).toFixed(2),
+      String(t.heldDays), t.type, t.hash,
+    ]);
+    const escape = (s: string) => /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    const csv = [head, ...rows].map(r => r.map(escape).join(",")).join("\n");
+    const code = (COUNTRIES.find(c => c.value === result.country)?.code ?? "xx").toUpperCase();
+    const short = result.wallet.slice(2, 10).toLowerCase();
+    const filename = `xlayer-tax-${result.year}-${code}-0x${short}.csv`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast(`${filename} downloaded`);
   };
 
   const toggleChain = (c:string) =>
     setChains(p => p.includes(c) ? p.filter(x=>x!==c) : [...p,c]);
 
+  const onWalletChange = (v:string) => {
+    setWallet(v);
+    const guess = detectChain(v);
+    if (guess && !chains.includes(guess)) setChains(p=>[...p, guess]);
+  };
+
+  const sleep = (ms:number) => new Promise(r=>setTimeout(r,ms));
+
   const onSubmit = async (e:React.FormEvent) => {
     e.preventDefault();
-    setLoading(true); setResult(null);
-    await new Promise(r=>setTimeout(r,1400));
-    const proceeds = Math.random()*80000+5000;
-    const cost = proceeds*(0.5+Math.random()*0.3);
-    const gains = proceeds-cost;
-    const income = Math.random()*4000;
-    const rate = country==="Germany"?0:country==="United States"?0.22:0.20;
-    const tax = Math.max(0,gains*rate)+income*rate;
-    setResult({wallet,country,year,txs:Math.floor(Math.random()*400+30),proceeds,cost,gains,income,tax});
-    setLoading(false);
+    setResult(null);
+    setLoading(true);
+    setPhase("processing");
+    setProgress01(0);
+    setStepIdx(0);
+    setCounter({txs:0,tokens:0,prices:0,total:0});
+    setErrMsg("");
+    setElapsed(0);
+    cancelRef.current = false;
+
+    const t0 = performance.now();
+    const timer = setInterval(() => setElapsed((performance.now() - t0) / 1000), 100);
+    const checkCancel = () => { if (cancelRef.current) throw new Error("__cancelled__"); };
+
+    try {
+      // Step 0 — Connect
+      setStepIdx(0); setProgress01(0.05);
+      await sleep(500);
+
+      // Step 1 — Find transactions
+      setStepIdx(1); setProgress01(0.18);
+      const totalTxs = Math.floor(Math.random()*180+60);
+      for (let i=0;i<=totalTxs;i+=Math.max(1,Math.floor(totalTxs/12))){
+        setCounter(c=>({...c,txs:Math.min(i,totalTxs),total:totalTxs}));
+        await sleep(35); checkCancel();
+      }
+      setCounter(c=>({...c,txs:totalTxs,total:totalTxs,tokens:Math.floor(Math.random()*8+5)}));
+
+      // Step 2 — Fetch historical prices
+      setStepIdx(2); setProgress01(0.34);
+      for (let i=0;i<=totalTxs;i+=Math.max(1,Math.floor(totalTxs/16))){
+        setCounter(c=>({...c,prices:Math.min(i,totalTxs)}));
+        setProgress01(0.34 + (i/totalTxs)*0.28);
+        await sleep(28); checkCancel();
+      }
+      setCounter(c=>({...c,prices:totalTxs}));
+
+      // Step 3 — Classify
+      setStepIdx(3); setProgress01(0.7);
+      await sleep(550);
+
+      // Step 4 — Calculate gains
+      setStepIdx(4); setProgress01(0.86);
+      await sleep(450);
+
+      // Step 5 — Generate report
+      setStepIdx(5); setProgress01(0.96);
+      await sleep(400);
+
+      setProgress01(1);
+      await sleep(180);
+
+      const txList = generateSampleTxs(wallet, year);
+      const totals = summarize(txList);
+      setResult({ wallet, country, year, txs: txList, totals });
+      // India is FIFO-only
+      if (country === "India") setMethod("FIFO");
+      setShowTxs(true);
+      setPhase("idle");
+      const finalCount = generateSampleTxs(wallet, year).length;
+      toast(`Done · ${finalCount} transactions in ${((performance.now()-t0)/1000).toFixed(1)}s`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Something went wrong.";
+      if (msg === "__cancelled__") {
+        setPhase("idle");
+      } else {
+        setErrMsg(msg);
+        setPhase("error");
+      }
+    } finally {
+      clearInterval(timer);
+      setLoading(false);
+    }
+  };
+
+  const resetProgress = () => {
+    setPhase("idle");
+    setProgress01(0);
+    setStepIdx(0);
+    setCounter({txs:0,tokens:0,prices:0,total:0});
+    setErrMsg("");
   };
 
   return (
     <div className="min-h-screen">
+      <CommandPalette
+        onAction={(id) => {
+          if (id === "sample")       fillSample();
+          if (id === "copy-install") copyInstall();
+          if (id === "export")       toast("Report exported (demo)");
+        }}
+      />
       {/* scroll progress */}
       <motion.div
         style={{ scaleX: progress }}
@@ -99,13 +275,7 @@ export default function Home() {
       />
 
       {/* ============ STICKY NAV ============ */}
-      <header
-        className={`sticky top-0 z-50 transition-all duration-300 ${
-          scrolled
-            ? "bg-bg/75 backdrop-blur-xl border-b border-line/70 py-3"
-            : "bg-transparent py-5"
-        }`}
-      >
+      <header className="sticky top-0 z-50 transition-all duration-300 bg-transparent py-5 [html[data-scrolled='true']_&]:bg-bg/95 [html[data-scrolled='true']_&]:border-b [html[data-scrolled='true']_&]:border-line/70 [html[data-scrolled='true']_&]:py-3">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white grid place-items-center shadow-soft">
@@ -121,24 +291,66 @@ export default function Home() {
           <a href="#privacy" className="hover:text-ink transition">Security</a>
         </nav>
         <div className="flex items-center gap-2">
+          <button
+            onClick={()=>{ const e=new KeyboardEvent('keydown',{key:'k',metaKey:true,bubbles:true}); window.dispatchEvent(e); }}
+            className="hidden md:inline-flex items-center gap-1.5 h-9 px-2 rounded-lg border border-line bg-white text-[12px] text-sub hover:border-brand-300 transition"
+            aria-label="Open command palette"
+          >
+            <Search size={13}/>
+            <kbd className="font-mono text-[10px] bg-bg border border-line rounded px-1">⌘K</kbd>
+          </button>
           <button className="btn-ghost hidden md:inline-flex">Sign in</button>
-          <button className="btn-ghost !bg-ink !text-white !border-ink hover:!bg-brand-600 hover:!border-brand-600 hover:!text-white !px-3 sm:!px-4">
-            <span className="hidden xs:inline">Get started</span>
-            <span className="xs:hidden">Start</span>
+          <button className="btn-ghost !bg-ink !text-white !border-ink hover:!bg-brand-600 hover:!border-brand-600 hover:!text-white !px-3 sm:!px-4 hidden xs:inline-flex">
+            <span className="hidden sm:inline">Get started</span>
+            <span className="sm:hidden">Start</span>
             <ArrowRight size={14}/>
+          </button>
+          <button
+            onClick={()=>setMobileNav(o=>!o)}
+            className="md:hidden m3-icon-btn !w-10 !h-10 !border !border-line"
+            aria-label={mobileNav ? "Close menu" : "Open menu"}
+          >
+            {mobileNav ? <X size={18}/> : <Menu size={18}/>}
           </button>
         </div>
         </div>
+        {/* Mobile menu */}
+        <AnimatePresence>
+          {mobileNav && (
+            <motion.div
+              initial={{height:0,opacity:0}}
+              animate={{height:"auto",opacity:1}}
+              exit={{height:0,opacity:0}}
+              transition={{duration:.22,ease:"easeOut"}}
+              className="md:hidden overflow-hidden"
+            >
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-3 pb-3 flex flex-col gap-1">
+                {[
+                  ["Product","#agent"],["Countries","#countries"],
+                  ["CLI","#install"],["Security","#privacy"],
+                ].map(([label,href])=>(
+                  <a key={href} href={href} onClick={()=>setMobileNav(false)}
+                    className="px-3 py-3 rounded-xl text-sm font-medium text-ink hover:bg-bg border border-transparent hover:border-line transition">
+                    {label}
+                  </a>
+                ))}
+                <button className="mt-2 btn-ghost !bg-ink !text-white !border-ink !justify-center">
+                  Get started <ArrowRight size={14}/>
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
       {/* ============ HERO ============ */}
       <section className="relative max-w-6xl mx-auto text-center mt-10 sm:mt-14 mb-14 sm:mb-20 px-4 sm:px-6 lg:px-10">
         {/* glow blobs */}
-        <div className="pointer-events-none absolute inset-x-0 -top-10 flex justify-center">
-          <div className="w-[520px] h-[520px] rounded-full bg-brand-300/30 blur-[120px]"/>
+        <div className="pointer-events-none absolute will-change-transform [transform:translateZ(0)] inset-x-0 -top-10 flex justify-center">
+          <div className="w-[420px] h-[420px] rounded-full bg-brand-300/30 blur-[80px]"/>
         </div>
-        <div className="pointer-events-none absolute -left-10 top-20 w-72 h-72 rounded-full bg-accent-rose/20 blur-[100px]"/>
-        <div className="pointer-events-none absolute -right-10 top-10 w-72 h-72 rounded-full bg-accent-peach/20 blur-[100px]"/>
+        <div className="pointer-events-none absolute will-change-transform [transform:translateZ(0)] -left-10 top-20 w-72 h-72 rounded-full bg-accent-rose/20 blur-[100px]"/>
+        <div className="pointer-events-none absolute will-change-transform [transform:translateZ(0)] -right-10 top-10 w-72 h-72 rounded-full bg-accent-peach/20 blur-[100px]"/>
 
         <div className="relative">
           <span className="pill mx-auto !px-3 !py-1.5 !text-[12px]">
@@ -146,7 +358,7 @@ export default function Home() {
             New · AI tax agent live in 30+ countries
           </span>
 
-          <h1 className="mt-6 text-[44px] xs:text-6xl sm:text-7xl lg:text-[104px] font-extrabold tracking-[-0.035em] leading-[0.95]">
+          <h1 className="hero-headline mt-6 text-[44px] xs:text-6xl sm:text-7xl lg:text-[104px] font-extrabold tracking-[-0.035em] leading-[0.95]">
             <span className="block">Crypto taxes,</span>
             <span className="block font-display italic font-normal shimmer-text leading-[1.1] pb-3 mt-1">
               done by an agent.
@@ -174,7 +386,7 @@ export default function Home() {
             <div className="flex items-center -space-x-2">
               {["us","gb","de","jp","in"].map(c=>(
                 // eslint-disable-next-line @next/next/no-img-element
-                <img key={c} src={flag(c)} alt="" className="w-7 h-7 rounded-full ring-2 ring-bg"/>
+                <img key={c} src={flag(c)} alt="" width={28} height={28} loading="lazy" decoding="async" className="w-7 h-7 rounded-full ring-2 ring-bg" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.visibility='hidden';}}/>
               ))}
             </div>
             <div className="flex items-center gap-1.5 text-sub text-sm">
@@ -191,13 +403,13 @@ export default function Home() {
       </section>
 
       {/* ============ BENTO GRID ============ */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 grid grid-cols-12 gap-4 sm:gap-5">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 grid grid-cols-12 [grid-auto-rows:minmax(0,auto)] gap-4 sm:gap-5">
 
         {/* ── Tax Agent (form) ─────────── */}
         <motion.section
           id="agent"
           initial={{opacity:0,y:14}} animate={{opacity:1,y:0}}
-          className="scroll-mt-28 bento col-span-12 lg:col-span-7 lg:row-span-2 bg-meshA"
+          className="scroll-mt-28 bento col-span-12 lg:col-span-7 bg-meshA"
         >
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-3">
@@ -207,20 +419,84 @@ export default function Home() {
                 <p className="eyebrow mt-0.5">Step 1 · Configure</p>
               </div>
             </div>
-            <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-sub">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-mint animate-pulse"/> live
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={runSampleDemo}
+                className="hidden sm:inline-flex items-center gap-1.5 h-7 px-3 rounded-full bg-brand-50 border border-brand-100 text-[11px] font-bold uppercase tracking-wider text-brand-700 hover:bg-brand-100 transition"
+              >
+                <Sparkles size={11}/> Run demo
+              </button>
+              <span className="live hidden sm:inline-flex">live</span>
+            </div>
           </div>
 
-          <form onSubmit={onSubmit} className="space-y-4">
-            <div>
-              <label className="label">Wallet address</label>
-              <div className="field">
-                <Wallet size={16} className="leading"/>
-                <input className="input font-mono" placeholder="0x… or bc1…"
-                  value={wallet} onChange={e=>setWallet(e.target.value)} required/>
-              </div>
-            </div>
+          <div className="relative">
+          <AnimatePresence mode="wait">
+          {phase === "idle" && (
+          <motion.form key="form" onSubmit={onSubmit} className="space-y-4"
+            initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}
+            transition={{duration:.25,ease:"easeOut"}}>
+            {(() => {
+              const trimmed = wallet.trim();
+              const detected = detectChain(trimmed);
+              const isValid = !!detected;
+              const showError = trimmed.length > 0 && !isValid;
+              return (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="label !mb-0">Wallet address</label>
+                    <button type="button" onClick={fillSample}
+                      className="text-[11px] font-semibold text-brand-700 hover:text-brand-800 inline-flex items-center gap-1">
+                      <Sparkles size={11}/> Try sample
+                    </button>
+                  </div>
+                  <div className="field">
+                    <Wallet size={16} className={`leading ${showError ? "!text-rose-500" : isValid ? "!text-accent-mint" : ""}`}/>
+                    <input
+                      className={`input font-mono pr-24 ${
+                        showError ? "!border-rose-400 focus:!border-rose-500 focus:!shadow-[0_0_0_4px_rgba(244,63,94,.15)]" :
+                        isValid   ? "!border-accent-mint focus:!border-accent-mint focus:!shadow-[0_0_0_4px_rgba(95,216,179,.18)]" : ""
+                      }`}
+                      placeholder="0x… or bc1… or Solana base58"
+                      value={wallet}
+                      onChange={e=>onWalletChange(e.target.value)}
+                      aria-invalid={showError}
+                      aria-describedby="wallet-status"
+                      required spellCheck={false} autoComplete="off"
+                    />
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                      {isValid && (
+                        <span className="hidden xs:inline-flex items-center gap-1 px-2 h-6 rounded-full bg-accent-mint/15 border border-accent-mint/40 text-[10px] font-bold uppercase tracking-wider text-[#1f7a52]">
+                          <Check size={10} strokeWidth={3}/>{detected}
+                        </span>
+                      )}
+                      <button type="button" onClick={pasteFromClipboard}
+                        className="m3-icon-btn !w-8 !h-8 !text-sub hover:!text-brand-700"
+                        aria-label="Paste from clipboard">
+                        <ClipboardPaste size={14}/>
+                      </button>
+                    </div>
+                  </div>
+                  <div id="wallet-status" className="min-h-[18px] mt-1.5 text-[11px] flex items-center gap-1.5">
+                    {showError && (
+                      <span className="text-rose-600 inline-flex items-center gap-1">
+                        <X size={11}/>
+                        {trimmed.length < 25 ? "Address looks too short" :
+                         trimmed.startsWith("0x") ? "Not a valid EVM address (must be 0x + 40 hex chars)" :
+                         "Unrecognized address format"}
+                      </span>
+                    )}
+                    {isValid && (
+                      <span className="text-[#1f7a52] inline-flex items-center gap-1">
+                        <Check size={11} strokeWidth={3}/>
+                        Valid {detected} address
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
@@ -233,12 +509,13 @@ export default function Home() {
                     label:c.label,
                     leading:(
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={flag(c.code)} alt="" className="w-5 h-5 rounded-full"/>
+                      <img src={flag(c.code)} alt="" width={20} height={20} loading="lazy" decoding="async" className="w-5 h-5 rounded-full" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.visibility='hidden';}}/>
                     ),
                   }))}
                   placeholder="Select country"
                   icon={<Globe2 size={16}/>}
                   ariaLabel="Country"
+                  searchable
                 />
               </div>
               <div>
@@ -261,26 +538,86 @@ export default function Home() {
                   const sel = chains.includes(c.name);
                   return (
                     <button key={c.name} type="button" onClick={()=>toggleChain(c.name)}
+                      aria-pressed={sel}
                       className={`chip ${sel?"chip-on":""}`}>
-                      <span className="w-2 h-2 rounded-full" style={{background:c.color}}/>
-                      {c.name}
+                      <span className={`w-6 h-6 rounded-full grid place-items-center shrink-0 transition ${sel ? "bg-white/15" : "bg-bg"}`}>
+                        {c.logo ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={c.logo} alt="" loading="lazy" className="chip-logo w-5 h-5 rounded-full ring-1 ring-black/5" onError={(e)=>{const img=e.currentTarget as HTMLImageElement; img.replaceWith(Object.assign(document.createElement('span'),{className:img.className+' grid place-items-center text-[9px] font-extrabold text-white',style:`background:${c.color}`,textContent:c.name[0]}));}}/>
+                        ) : (
+                          <span
+                            className="chip-logo w-5 h-5 rounded-full grid place-items-center text-[9px] font-extrabold text-white ring-1 ring-black/5"
+                            style={{background:c.color}}
+                          >{c.initial ?? c.name[0]}</span>
+                        )}
+                      </span>
+                      <span className="leading-none">{c.name}</span>
+                      {sel && <Check size={12} className="ml-0.5 -mr-0.5 opacity-90"/>}
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            <button type="submit" className="btn btn-primary mt-2" disabled={loading}>
-              {loading ? <Loader2 size={16} className="animate-spin"/> : <Zap size={16}/>}
-              {loading ? "Scanning wallet…" : "Calculate tax"}
-            </button>
-          </form>
+            {(() => {
+              const reason = !wallet.trim()        ? "Enter a wallet to continue"
+                            : !detectChain(wallet)  ? "Enter a valid wallet address"
+                            : !country              ? "Select a country to continue"
+                            : !chains.length        ? "Pick at least one network"
+                            : null;
+              return (
+                <button type="submit" className="btn btn-primary mt-2" disabled={loading || !!reason}>
+                  <Zap size={16}/> {reason ?? "Calculate tax"}
+                </button>
+              );
+            })()}
+          </motion.form>
+          )}
+
+          {phase === "processing" && (
+            <motion.div key="processing"
+              initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}
+              transition={{duration:.25,ease:"easeOut"}}>
+              <ProgressView
+                stepIdx={stepIdx}
+                progress01={progress01}
+                counter={counter}
+                chain={chains[0]||"Ethereum"}
+                year={year}
+                elapsed={elapsed}
+                onCancel={cancelScan}
+              />
+            </motion.div>
+          )}
+
+          {phase === "error" && (
+            <motion.div key="error"
+              initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}}
+              transition={{duration:.25,ease:"easeOut"}}
+              className="rounded-2xl border border-rose-200 bg-rose-50/60 p-6 font-mono text-[13px] leading-relaxed">
+              <div className="flex items-start gap-3">
+                <span className="text-rose-600 text-lg leading-none">✗</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-ink font-semibold">{errMsg}</div>
+                  <div className="text-sub mt-2">
+                    Try a different year, or check the address is correct.
+                  </div>
+                  <button onClick={resetProgress}
+                    className="mt-4 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-white border border-line text-ink text-xs font-semibold hover:border-brand-300 hover:text-brand-700 transition">
+                    ← Back
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+          </AnimatePresence>
+          </div>
         </motion.section>
 
         {/* ── Summary ──────────────────── */}
         <motion.section
           initial={{opacity:0,y:14}} animate={{opacity:1,y:0}} transition={{delay:.05}}
-          className="bento col-span-12 lg:col-span-5 lg:row-span-2"
+          className="bento col-span-12 lg:col-span-5"
         >
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-3">
@@ -290,9 +627,41 @@ export default function Home() {
                 <p className="eyebrow mt-0.5">Step 2 · Review</p>
               </div>
             </div>
-            <span className="text-[11px] text-sub">
-              {result ? `${result.country} · ${result.year}` : "awaiting input"}
-            </span>
+            {result ? (
+              <div className="hidden xs:inline-flex items-center gap-1.5 h-7 pl-2.5 pr-1 rounded-full bg-brand-50 border border-brand-100 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-700">
+                <span className="truncate max-w-[120px]">{result.country}</span>
+                <span className="opacity-40">·</span>
+                <div className="flex items-center bg-white/70 rounded-full p-0.5 border border-brand-100">
+                  {["2024","2025","2026"].map(y=>{
+                    const sel = result.year === y;
+                    return (
+                      <button
+                        key={y}
+                        type="button"
+                        onClick={()=>{
+                          setYear(y);
+                          setResult({...result, year:y});
+                          toast(`Year switched to ${y}`);
+                        }}
+                        className={`px-1.5 h-5 rounded-full transition ${
+                          sel ? "bg-brand-600 text-white" : "text-brand-700 hover:bg-brand-100"
+                        }`}
+                      >
+                        {y}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <span className="hidden xs:inline-flex items-center gap-1.5 h-6 pl-1.5 pr-2.5 rounded-full bg-bg border border-line text-[10px] font-bold uppercase tracking-[0.12em] text-sub">
+                <span className="relative w-1.5 h-1.5">
+                  <span className="absolute inset-0 rounded-full bg-sub2 animate-ping opacity-60"/>
+                  <span className="absolute inset-0 rounded-full bg-sub2"/>
+                </span>
+                awaiting input
+              </span>
+            )}
           </div>
 
           <AnimatePresence mode="wait">
@@ -316,33 +685,168 @@ export default function Home() {
               </motion.div>
             )}
 
-            {!loading && result && (
+            {!loading && result && (() => {
+              const isIndia = result.country === "India";
+              const taxFIFO = estimateTax(result.totals, result.country, "FIFO");
+              const taxHIFO = estimateTax(result.totals, result.country, "HIFO");
+              const taxAvg  = estimateTax(result.totals, result.country, "Avg");
+              const taxNow  = method === "FIFO" ? taxFIFO : method === "HIFO" ? taxHIFO : taxAvg;
+              const lowest  = Math.min(taxFIFO.tax, taxHIFO.tax, taxAvg.tax);
+              const netTaxable = isIndia ? result.totals.gains : result.totals.netGains;
+              const hasIncome = result.totals.airdrops.count > 0 || result.totals.yieldEvents.count > 0;
+              return (
               <motion.div key="r" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0}}
                 className="space-y-4">
+
+                {/* Hero tax tile (white number) */}
                 <div className="relative rounded-2xl p-5 overflow-hidden bento-dark !p-5">
-                  <div className="text-[11px] uppercase tracking-wider opacity-60">Estimated tax owed</div>
-                  <div className="mt-1 text-4xl font-bold tracking-tight">{fmt(result.tax)}</div>
+                  <div className="text-[11px] uppercase tracking-wider opacity-60">Estimated tax due</div>
+                  <div className="mt-1 text-4xl font-bold tracking-tight text-white">{fmt(taxNow.tax)}</div>
                   <div className="mt-3 text-xs opacity-60 font-mono truncate">
                     {result.wallet.slice(0,8)}…{result.wallet.slice(-6)}
                   </div>
                   <div className="absolute -right-8 -bottom-8 w-32 h-32 rounded-full bg-brand-500/30 blur-2xl"/>
                 </div>
+
+                {/* Gains / Losses / Net taxable / Income */}
                 <div className="grid grid-cols-2 gap-3">
-                  <Mini label="Proceeds" value={fmt(result.proceeds)} icon={<TrendingUp size={14}/>} tint="bg-meshB"/>
-                  <Mini label="Cost basis" value={fmt(result.cost)} icon={<Coins size={14}/>} tint="bg-meshC"/>
-                  <Mini label="Gains" value={fmt(result.gains)} icon={<Gauge size={14}/>} tint="bg-meshD"/>
-                  <Mini label="Income" value={fmt(result.income)} icon={<Sparkles size={14}/>} tint="bg-meshA"/>
+                  <Mini label="Capital gains"
+                    value={`+${fmt(result.totals.gains)}`}
+                    valueClass="text-gain"
+                    icon={<TrendingUp size={14}/>} tint="bg-meshB"
+                    tip="Total positive gains from disposals."/>
+                  <Mini label="Capital losses"
+                    value={`-${fmt(result.totals.losses)}`}
+                    valueClass="text-loss"
+                    icon={<TrendingDown size={14}/>} tint="bg-meshC"
+                    tip="Total losses from disposals."/>
+                  <Mini label="Net taxable"
+                    value={fmt(netTaxable)}
+                    icon={<Gauge size={14}/>} tint="bg-meshD"
+                    tip={isIndia ? "India does not allow loss offsets." : "Gains minus losses."}
+                    note={isIndia && result.totals.losses > 0 ? "losses not offsettable" : undefined}/>
+                  <Mini label="Income"
+                    value={fmt(result.totals.income)}
+                    icon={<Sparkles size={14}/>} tint="bg-meshA"
+                    tip="Airdrops, staking, yield. Often taxed as ordinary income."/>
                 </div>
+
+                {/* India TDS card */}
+                {isIndia && taxNow.tdsObligation && (
+                  <div className="rounded-2xl border-2 border-amber bg-amber/5 p-4">
+                    <div className="text-[11px] uppercase tracking-wider font-bold text-amber">TDS Obligations</div>
+                    <div className="mt-1 text-[13px] text-ink font-semibold">
+                      {taxNow.tdsObligation.count} transactions over ₹50,000
+                    </div>
+                    <div className="text-[12px] text-sub">
+                      Total TDS to deposit: <span className="font-bold text-ink">₹{taxNow.tdsObligation.total.toLocaleString("en-IN",{maximumFractionDigits:0})}</span> <span className="text-sub">(1%)</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Cost basis selector */}
+                <div className="rounded-2xl border border-line bg-white p-4">
+                  <div className="text-[11px] font-semibold text-sub uppercase tracking-wider mb-3">Cost basis method</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["FIFO","HIFO","Avg"] as CostBasisMethod[]).map((m)=>{
+                      const t = m==="FIFO"?taxFIFO:m==="HIFO"?taxHIFO:taxAvg;
+                      const sel = method === m;
+                      const disabled = isIndia && m !== "FIFO";
+                      const isLowest = !disabled && t.tax === lowest && [taxFIFO.tax,taxHIFO.tax,taxAvg.tax].filter(x=>x===lowest).length===1;
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={()=> !disabled && setMethod(m)}
+                          disabled={disabled}
+                          title={disabled ? "India requires FIFO." : `Estimated tax: ${fmt(t.tax)}`}
+                          className={`relative rounded-xl border p-3 text-left transition ${
+                            disabled ? "opacity-40 cursor-not-allowed bg-bg border-line" :
+                            sel ? "border-brand-500 bg-brand-50/60 shadow-soft" : "border-line bg-white hover:border-brand-300"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-ink">
+                            <span className={`w-3 h-3 rounded-full border ${sel ? "bg-brand-600 border-brand-600 ring-4 ring-brand-100" : "border-line"}`}/>
+                            {m === "Avg" ? "Avg cost" : m}
+                            {isLowest && (
+                              <span className="ml-auto inline-flex items-center gap-0.5 px-1 rounded text-[9px] bg-gain/15 text-gain font-bold">★ low</span>
+                            )}
+                          </div>
+                          <div className="mt-1.5 text-[15px] font-bold tracking-tight font-mono">{fmt(t.tax)}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Income events section */}
+                {hasIncome && (
+                  <div className="rounded-2xl border border-line bg-white p-4">
+                    <div className="text-[11px] font-semibold text-sub uppercase tracking-wider mb-3">
+                      Income events <span className="text-sub/70 normal-case font-normal">· taxable at slab rate</span>
+                    </div>
+                    <div className="space-y-1.5 text-[13px]">
+                      {result.totals.airdrops.count > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-ink">{result.totals.airdrops.count} airdrops received</span>
+                          <span className="font-mono font-semibold">{fmt(result.totals.airdrops.total)}</span>
+                        </div>
+                      )}
+                      {result.totals.yieldEvents.count > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-ink">{result.totals.yieldEvents.count} yield / interest</span>
+                          <span className="font-mono font-semibold">{fmt(result.totals.yieldEvents.total)}</span>
+                        </div>
+                      )}
+                      <div className="border-t border-line my-1"/>
+                      <div className="flex justify-between font-bold">
+                        <span>Total income</span>
+                        <span className="font-mono">{fmt(result.totals.income)}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Footer actions */}
                 <div className="flex items-center justify-between text-xs text-sub px-1 pt-1">
-                  <span>{result.txs} transactions classified</span>
-                  <button className="text-brand-700 font-semibold flex items-center gap-1 hover:underline">
-                    Export PDF <ChevronRight size={14}/>
-                  </button>
+                  <span>{result.txs.length} transactions classified</span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={()=>setShowTxs(s=>!s)}
+                      className="text-brand-700 font-semibold flex items-center gap-1 hover:underline">
+                      {showTxs ? "Hide" : "View"} transactions <ChevronRight size={14}/>
+                    </button>
+                    <button onClick={()=>exportCSV()} className="text-brand-700 font-semibold flex items-center gap-1 hover:underline">
+                      Export CSV
+                    </button>
+                  </div>
                 </div>
               </motion.div>
-            )}
+              );
+            })()}
           </AnimatePresence>
         </motion.section>
+
+        {/* ── Transaction table (only after a result) ─────────── */}
+        {result && showTxs && (
+          <Reveal className="col-span-12">
+            <section className="bento">
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <span className="ico"><Receipt size={16}/></span>
+                  <div>
+                    <h3 className="font-semibold text-[15px]">Transactions</h3>
+                    <p className="eyebrow mt-0.5">{result.txs.length} disposals · {result.country} · {result.year}</p>
+                  </div>
+                </div>
+                <button onClick={exportCSV} className="btn-ghost !h-9 !text-[12px]">
+                  <Download size={14}/> Export CSV
+                </button>
+              </div>
+              <TransactionTable txs={result.txs} country={result.country}/>
+            </section>
+          </Reveal>
+        )}
 
         {/* ── Install (terminal) ───────── */}
         <Reveal className="col-span-12 lg:col-span-7">
@@ -362,18 +866,25 @@ export default function Home() {
             </span>
           </div>
 
-          <div className="rounded-xl bg-black/60 border border-white/10 overflow-hidden backdrop-blur">
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10">
+          <div className="rounded-xl bg-black/60 border border-white/10 overflow-hidden">
+            <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-white/10">
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]"/>
                 <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]"/>
                 <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f]"/>
               </div>
-              <span className="text-[11px] text-white/40 font-mono">~ /chaintax</span>
+              <div className="flex items-center gap-1">
+                {(["npm","pnpm","yarn","bun"] as Pkg[]).map(p=>(
+                  <button key={p} onClick={()=>setPkg(p)}
+                    className={`text-[11px] font-mono px-2 py-1 rounded transition ${pkg===p ? "bg-white/15 text-white" : "text-white/45 hover:text-white"}`}>
+                    {p}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="flex items-center justify-between gap-3 px-4 py-4">
               <code className="font-mono text-[13px] sm:text-sm text-white truncate">
-                <span className="text-accent-mint select-none">$ </span>{INSTALL_CMD}
+                <span className="text-accent-mint select-none">$ </span>{INSTALL_CMDS[pkg]}
               </code>
               <button onClick={copyInstall}
                 className="shrink-0 inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-white text-ink text-xs font-semibold hover:bg-bg transition">
@@ -414,7 +925,7 @@ export default function Home() {
 
         {/* ── Countries ────────────────── */}
         <Reveal className="col-span-12 sm:col-span-6 lg:col-span-4">
-        <section id="countries" className="scroll-mt-28 bento bg-meshB bento-clip relative min-h-[340px] flex flex-col h-full">
+        <section id="countries" className="scroll-mt-28 bento bg-meshB bento-clip relative min-h-[420px] flex flex-col h-full">
           <div className="absolute -top-16 -right-16 w-48 h-48 rounded-full bg-accent-sky/20 blur-3xl"/>
           <div className="relative flex items-center gap-3 mb-4">
             <span className="ico !text-accent-sky"><Globe2 size={16}/></span>
@@ -425,70 +936,64 @@ export default function Home() {
           </h3>
           <p className="relative text-[15px] text-ink font-semibold mt-1">jurisdictions supported</p>
           <p className="relative text-sm text-sub mt-1 mb-5">Tax rules updated every quarter.</p>
-          <div className="relative grid grid-cols-6 gap-2 mt-auto">
+          <div className="relative grid grid-cols-5 gap-2 mt-auto">
             {[
-              "us","gb","de","fr","ca","au",
-              "in","jp","sg","ng","br","mx",
-              "es","it","nl","ch","se","ae",
-              "kr","za","pt","ie","nz","pl",
+              "us","gb","de","fr","ca",
+              "au","in","jp","sg","br",
+              "es","it","nl","ch","kr",
             ].map(c=>(
               <div key={c} className="group aspect-square rounded-xl bg-white border border-line shadow-soft flex items-center justify-center hover:border-brand-300 hover:-translate-y-0.5 hover:shadow-cardHover transition">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={flag(c)} alt={c} className="w-6 h-6 rounded-full ring-1 ring-line group-hover:scale-110 transition"/>
+                <img src={flag(c)} alt={c} width={24} height={24} loading="lazy" decoding="async" className="w-6 h-6 rounded-full ring-1 ring-line group-hover:scale-110 transition" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.visibility='hidden';}}/>
               </div>
             ))}
-            <div className="aspect-square rounded-xl bg-brand-50 border border-brand-200 flex items-center justify-center text-[11px] font-bold text-brand-700">
-              +6
-            </div>
+            <div className="col-span-5 mt-1 text-[11px] text-sub text-center">+ 15 more countries</div>
           </div>
         </section>
         </Reveal>
 
         {/* ── Multi-chain ──────────────── */}
         <Reveal delay={0.08} className="col-span-12 sm:col-span-6 lg:col-span-4">
-        <section className="bento bg-meshD bento-clip relative min-h-[340px] flex flex-col h-full">
+        <section className="bento bg-meshD bento-clip relative min-h-[420px] flex flex-col h-full">
           <div className="absolute -bottom-20 -left-16 w-56 h-56 rounded-full bg-accent-mint/25 blur-3xl"/>
           <div className="relative flex items-center gap-3 mb-4">
             <span className="ico !text-accent-mint"><Network size={16}/></span>
             <span className="eyebrow">Every chain</span>
           </div>
           <h3 className="relative text-[44px] font-extrabold tracking-[-0.03em] leading-none">
-            6<span className="shimmer-text"> chains</span>
+            10<span className="shimmer-text"> chains</span>
           </h3>
           <p className="relative text-[15px] text-ink font-semibold mt-1">EVM, Bitcoin & Solana</p>
           <p className="relative text-sm text-sub mt-1 mb-5">One wallet, one unified report.</p>
-          <div className="relative grid grid-cols-2 gap-2 mt-auto">
+          <div className="relative grid grid-cols-5 gap-2 mt-auto">
             {CHAINS.map(c=>(
               <div key={c.name}
-                className="group relative rounded-xl bg-white border border-line shadow-soft px-3 py-3 hover:border-brand-300 hover:-translate-y-0.5 hover:shadow-cardHover transition overflow-hidden">
-                <div
-                  className="absolute inset-x-0 top-0 h-[3px]"
-                  style={{background:`linear-gradient(90deg, ${c.color}, ${c.color}00)`}}
-                />
-                <div className="flex items-center gap-2.5">
+                title={c.name}
+                className="group aspect-square rounded-xl bg-white border border-line shadow-soft grid place-items-center hover:border-brand-300 hover:-translate-y-0.5 hover:shadow-cardHover transition">
+                {c.logo ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={c.logo} alt={c.name} loading="lazy"
+                    className="w-7 h-7 rounded-full ring-1 ring-line object-cover group-hover:scale-110 transition"
+                    onError={(e)=>{const img=e.currentTarget as HTMLImageElement; img.replaceWith(Object.assign(document.createElement('span'),{className:img.className+' grid place-items-center text-[12px] font-extrabold text-white',style:`background:${c.color}`,textContent:c.name[0]}));}}/>
+                ) : (
                   <span
-                    className="w-7 h-7 rounded-lg grid place-items-center text-white text-[11px] font-bold shrink-0 shadow-soft"
+                    className="w-7 h-7 rounded-full ring-1 ring-line grid place-items-center text-[12px] font-extrabold text-white group-hover:scale-110 transition"
                     style={{background:c.color}}
-                  >
-                    {c.name[0]}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-bold leading-tight truncate">{c.name}</div>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-accent-mint animate-pulse"/>
-                      <span className="text-[10px] uppercase tracking-wider text-sub font-semibold">live</span>
-                    </div>
-                  </div>
-                </div>
+                  >{c.initial ?? c.name[0]}</span>
+                )}
               </div>
             ))}
+            <div className="col-span-5 mt-1 flex items-center justify-center gap-1.5 text-[11px] text-sub">
+              <span className="w-1.5 h-1.5 rounded-full bg-accent-mint animate-pulse"/>
+              all networks live
+            </div>
           </div>
         </section>
         </Reveal>
 
         {/* ── Privacy ──────────────────── */}
         <Reveal delay={0.16} className="col-span-12 sm:col-span-12 lg:col-span-4">
-        <section id="privacy" className="scroll-mt-28 bento bg-meshA bento-clip relative min-h-[340px] flex flex-col h-full">
+        <section id="privacy" className="scroll-mt-28 bento bg-meshA bento-clip relative min-h-[420px] flex flex-col h-full">
           <div className="absolute -top-20 -right-20 w-64 h-64 rounded-full bg-accent-lilac/25 blur-3xl"/>
           <div className="relative flex items-center gap-3 mb-4">
             <span className="ico !text-accent-lilac"><Lock size={16}/></span>
@@ -538,10 +1043,10 @@ export default function Home() {
         <Reveal className="col-span-12">
         <section className="bento">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-            <Stat n="12k+"  label="wallets analyzed"/>
-            <Stat n="30+"   label="countries supported"/>
-            <Stat n="$84M"  label="in gains tracked"/>
-            <Stat n="4.9★"  label="user rating"/>
+            <StatCount to={12418} suffix="+" label="wallets analyzed"/>
+            <StatCount to={50}    suffix="+" label="countries supported"/>
+            <StatCount to={84}    prefix="$" suffix="M" label="in gains tracked"/>
+            <StatCount to={4.9}   suffix="★" decimals={1} label="user rating"/>
           </div>
         </section>
         </Reveal>
@@ -551,8 +1056,8 @@ export default function Home() {
       <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 mt-12 sm:mt-16 pb-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-sub">
         <span>© 2026 ChainTax. Not legal advice.</span>
         <div className="flex items-center gap-3">
-          <a href="#" className="hover:text-ink transition"><Twitter size={14}/></a>
-          <a href="#" className="hover:text-ink transition"><Github size={14}/></a>
+          <a href="https://x.com/chaintax" target="_blank" rel="noopener noreferrer" aria-label="ChainTax on X" className="hover:text-ink transition"><Twitter size={14}/></a>
+          <a href="https://github.com/chaintax" target="_blank" rel="noopener noreferrer" aria-label="ChainTax on GitHub" className="hover:text-ink transition"><Github size={14}/></a>
         </div>
       </footer>
     </div>
@@ -561,13 +1066,98 @@ export default function Home() {
 
 /* ----- helpers ----- */
 
-function Mini({label,value,icon,tint}:{label:string;value:string;icon:React.ReactNode;tint?:string}) {
+function Mini({label,value,icon,tint,tip,valueClass,note}:{label:string;value:string;icon:React.ReactNode;tint?:string;tip?:string;valueClass?:string;note?:string}) {
   return (
-    <div className={`rounded-2xl border border-line p-4 ${tint??"bg-bg"} shadow-soft`}>
+    <div title={tip} className={`group rounded-2xl border border-line p-4 ${tint??"bg-bg"} shadow-soft cursor-help`}>
       <div className="flex items-center gap-1.5 text-[11px] text-sub uppercase tracking-wider font-semibold">
         <span className="text-brand-600">{icon}</span> {label}
+        {tip && <Info size={10} className="opacity-0 group-hover:opacity-60 transition ml-auto"/>}
       </div>
-      <div className="mt-1 font-bold text-lg tracking-tight">{value}</div>
+      <div className={`mt-1 font-bold text-lg tracking-tight font-mono ${valueClass ?? ""}`}>{value}</div>
+      {note && <div className="text-[10px] text-sub mt-0.5">{note}</div>}
+    </div>
+  );
+}
+
+const STEPS = [
+  "Connect to network",
+  "Find transactions",
+  "Fetching historical prices",
+  "Classifying transactions",
+  "Calculating gains",
+  "Generating report",
+];
+
+function ProgressView({
+  stepIdx, progress01, counter, chain, year, elapsed, onCancel,
+}:{
+  stepIdx:number; progress01:number;
+  counter:{txs:number;tokens:number;prices:number;total:number};
+  chain:string; year:string; elapsed:number; onCancel:()=>void;
+}) {
+  const pct = Math.round(progress01*100);
+  const current = STEPS[stepIdx] ?? STEPS[STEPS.length-1];
+
+  return (
+    <div role="status" aria-live="polite" aria-atomic="false" className="rounded-2xl border border-line bg-white p-5 sm:p-6 font-mono text-[13px]">
+      {/* header line */}
+      <div className="flex items-center justify-between gap-4 mb-3">
+        <div className="text-ink font-semibold truncate">{current}…</div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-sub tabular-nums">{elapsed.toFixed(1)}s</span>
+          <span className="text-sub tabular-nums">{pct}%</span>
+          <button onClick={onCancel} className="text-rose-600 hover:text-rose-700 inline-flex items-center gap-1 text-[12px] font-semibold">
+            <StopCircle size={13}/> Cancel
+          </button>
+        </div>
+      </div>
+
+      {/* progress bar */}
+      <div className="h-2 rounded-full bg-line overflow-hidden mb-5">
+        <motion.div
+          className="h-full bg-gradient-to-r from-brand-500 via-accent-rose to-accent-peach"
+          animate={{ width: `${pct}%` }}
+          transition={{ duration: 0.3, ease: "easeOut" }}
+        />
+      </div>
+
+      {/* steps */}
+      <ul className="space-y-2">
+        {STEPS.map((label,i)=>{
+          const done = i < stepIdx;
+          const active = i === stepIdx;
+          let detail = "";
+          if (i===0) detail = `Connected to ${chain}`;
+          if (i===1) detail = counter.total ? `Found ${counter.total} transactions (${year})` : "";
+          if (i===2 && (active || done)) detail = `prices ${counter.prices}/${counter.total}`;
+          return (
+            <li key={label} className="flex items-start gap-3">
+              <span className={`w-4 text-center select-none ${
+                done ? "text-accent-mint" : active ? "text-ink" : "text-sub/50"
+              }`}>
+                {done ? "✓" : active ? "→" : "○"}
+              </span>
+              <span className={`flex-1 truncate ${
+                done ? "text-sub" : active ? "text-ink font-semibold" : "text-sub/60"
+              }`}>
+                {done && detail ? detail : label}
+                {active && (
+                  <span className="ml-1 inline-block w-[7px] h-[14px] align-[-2px] bg-ink animate-pulse"/>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* live counter */}
+      <div className="mt-5 pt-4 border-t border-line text-[12px] text-sub tabular-nums">
+        {counter.txs || counter.total || 0} transactions
+        {counter.tokens > 0 && <> · {counter.tokens} tokens</>}
+        {counter.prices > 0 && counter.prices < counter.total && (
+          <> · fetching prices {counter.prices}/{counter.total}</>
+        )}
+      </div>
     </div>
   );
 }
@@ -577,6 +1167,19 @@ function Stat({n,label}:{n:string;label:string}) {
     <div className="text-center sm:text-left">
       <div className="text-3xl sm:text-4xl font-bold tracking-tight">
         <span className="shimmer-text">{n}</span>
+      </div>
+      <div className="text-xs text-sub mt-1">{label}</div>
+    </div>
+  );
+}
+
+function StatCount({to,prefix,suffix,decimals,label}:{to:number;prefix?:string;suffix?:string;decimals?:number;label:string}) {
+  return (
+    <div className="text-center sm:text-left">
+      <div className="text-3xl sm:text-4xl font-bold tracking-tight">
+        <span className="shimmer-text">
+          <CountUp to={to} prefix={prefix} suffix={suffix} decimals={decimals}/>
+        </span>
       </div>
       <div className="text-xs text-sub mt-1">{label}</div>
     </div>

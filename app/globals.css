@@ -4,9 +4,13 @@
 
 @layer base {
   html {
-    scroll-behavior: smooth;
-    scroll-padding-top: 96px;
+    scroll-padding-top: 72px;
   }
+  /* Lenis smooth scroll */
+  html.lenis, html.lenis body { height: auto; }
+  .lenis.lenis-smooth { scroll-behavior: auto !important; }
+  .lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+  .lenis.lenis-stopped { overflow: hidden; }
   html, body { @apply h-full; }
   body {
     @apply font-sans text-ink antialiased bg-bg;
@@ -17,6 +21,12 @@
     -webkit-font-smoothing: antialiased;
   }
   ::selection { background: #d4d0ff; color: #2a1f72; }
+  :focus-visible {
+    outline: 2px solid #6c5cf5;
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  button:focus-visible, a:focus-visible { outline-offset: 3px; }
 }
 
 @layer components {
@@ -24,6 +34,8 @@
   .bento {
     @apply relative bg-card rounded-bento border border-line shadow-card
            p-5 sm:p-6 transition-all duration-300;
+    content-visibility: auto;
+    contain-intrinsic-size: 1px 380px;
   }
   .bento-clip { @apply overflow-hidden; }
   .bento:hover { @apply shadow-cardHover -translate-y-[1px]; }
@@ -76,14 +88,36 @@
 
   /* ---------- Chips ---------- */
   .chip {
-    @apply inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full
+    @apply relative inline-flex items-center gap-2 h-10 pl-2 pr-3.5 rounded-full
            border border-line bg-white text-[13px] font-medium text-ink
-           cursor-pointer transition select-none
-           hover:border-brand-300 hover:text-brand-700 hover:bg-brand-50/40;
+           cursor-pointer select-none
+           transition-[background,border-color,color,transform,box-shadow] duration-200 ease-out
+           hover:border-brand-300 hover:text-brand-700 hover:bg-brand-50/50
+           hover:-translate-y-[1px] active:translate-y-0;
   }
   .chip-on {
-    @apply bg-brand-600 text-white border-brand-600 shadow-soft
-           hover:bg-brand-600 hover:text-white hover:border-brand-600;
+    @apply bg-gradient-to-b from-brand-500 to-brand-700 text-white border-transparent
+           shadow-[0_6px_16px_-6px_rgba(91,70,232,.55),inset_0_1px_0_rgba(255,255,255,.25)]
+           hover:from-brand-500 hover:to-brand-700 hover:text-white hover:border-transparent;
+  }
+  .chip-on .chip-logo { @apply ring-2 ring-white/40; }
+
+  /* ---------- Live status pill ---------- */
+  .live {
+    @apply inline-flex items-center gap-1.5 h-6 pl-1.5 pr-2.5 rounded-full
+           bg-accent-mint/10 border border-accent-mint/30 text-[10px] font-bold
+           uppercase tracking-[0.12em] text-[#1f7a52];
+  }
+  .live::before {
+    content: "";
+    @apply w-1.5 h-1.5 rounded-full bg-accent-mint;
+    box-shadow: 0 0 0 0 rgba(95,216,179,.6);
+    animation: livePulse 1.8s cubic-bezier(.4,0,.2,1) infinite;
+  }
+  @keyframes livePulse {
+    0%   { box-shadow: 0 0 0 0 rgba(95,216,179,.55); }
+    70%  { box-shadow: 0 0 0 6px rgba(95,216,179,0); }
+    100% { box-shadow: 0 0 0 0 rgba(95,216,179,0); }
   }
 
   /* ---------- Buttons ---------- */
@@ -111,6 +145,21 @@
 
   /* divider */
   .divider { @apply h-px w-full bg-line; }
+}
+
+/* honor reduced motion globally */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* shrink hero on short landscape phones */
+@media (max-height: 640px) and (orientation: landscape) {
+  h1.hero-headline { font-size: 36px !important; line-height: 1 !important; }
 }
 
 /* nicer native scrollbar */
